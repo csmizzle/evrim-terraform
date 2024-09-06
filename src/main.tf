@@ -16,38 +16,46 @@ locals {
   }
 }
 
-// VPC and Subnets
-resource "aws_vpc" "evrim-vpc-dev" {
-  cidr_block = "10.0.0.0/16"
+
+// VPC Module
+module "vpc" {
+  source = "terraform-aws-modules/vpc/aws"
+  name   = "evrim-vpc-dev"
+  azs    = var.azs
+  public_subnets = var.public_subnet_cidrs
+  private_subnets = var.private_subnet_cidrs
+
+  enable_nat_gateway = true
   enable_dns_hostnames = true
-  enable_dns_support = true
+  enable_dns_support   = true
   tags = {
     Name = "Evrim Dev"
   }
 }
 
+
 // Configure VPC for SSM
 resource "aws_vpc_endpoint" "ssm_endpoint" {
   for_each            = local.services
-  vpc_id              = aws_vpc.evrim-vpc-dev.id
+  vpc_id              = module.vpc.vpc_id
   service_name        = each.value.name
   vpc_endpoint_type   = "Interface"
   security_group_ids  = [aws_security_group.ssm_https.id]
   private_dns_enabled = true
   ip_address_type     = "ipv4"
-  subnet_ids          = aws_subnet.private_subnet[*].id
+  subnet_ids          = module.vpc.private_subnets
 }
 
 
 resource "aws_security_group" "ssm_https" {
   name        = "allow_ssm"
   description = "Allow SSM traffic"
-  vpc_id      = aws_vpc.evrim-vpc-dev.id
+  vpc_id      = module.vpc.vpc_id
   ingress {
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
-    cidr_blocks = [aws_vpc.evrim-vpc-dev.cidr_block]
+    cidr_blocks = [module.vpc.vpc_cidr_block]
   }
 
   egress {
@@ -59,59 +67,6 @@ resource "aws_security_group" "ssm_https" {
   tags = {
     Name = "Private Instance"
   }
-}
-
-resource "aws_subnet" "public_subnets" {
-  count             = length(var.public_subnet_cidrs)
-  vpc_id            = aws_vpc.evrim-vpc-dev.id
-  cidr_block        = element(var.public_subnet_cidrs, count.index)
-  availability_zone = element(var.azs, count.index)
-
-  tags = {
-    Name = "Public Subnet ${count.index + 1}"
-  }
-}
-
-
-resource "aws_subnet" "private_subnet" {
-  count             = length(var.private_subnet_cidrs)
-  vpc_id            = aws_vpc.evrim-vpc-dev.id
-  cidr_block        = element(var.private_subnet_cidrs, count.index)
-  availability_zone = element(var.azs, count.index)
-
-  tags = {
-    Name = "Private Subnet ${count.index + 1}"
-  }
-}
-
-
-resource "aws_internet_gateway" "gw" {
-  vpc_id = aws_vpc.evrim-vpc-dev.id
-
-  tags = {
-    Name = "Evrim Dev IGW"
-  }
-}
-
-
-resource "aws_route_table" "public_route_table" {
-  vpc_id = aws_vpc.evrim-vpc-dev.id
-
-  route {
-    cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.gw.id
-  }
-
-  tags = {
-    name = "Public Route Table 2"
-  }
-}
-
-
-resource "aws_route_table_association" "public_route_table_association" {
-  count          = length(aws_subnet.public_subnets)
-  subnet_id      = element(aws_subnet.public_subnets[*].id, count.index)
-  route_table_id = aws_route_table.public_route_table.id
 }
 
 
@@ -148,14 +103,14 @@ resource "aws_iam_instance_profile" "ssm_instance_profile" {
 resource "aws_security_group" "evrim-dev-server-private" {
   name        = "evrim-dev-server-private"
   description = "Allow API Access"
-  vpc_id      = aws_vpc.evrim-vpc-dev.id
+  vpc_id      = module.vpc.vpc_id
 
   ingress {
     description = "Allow Healthchecks"
     from_port   = 8080
     to_port     = 8080
     protocol    = "tcp"
-    cidr_blocks = [aws_vpc.evrim-vpc-dev.cidr_block]
+    cidr_blocks = [module.vpc.vpc_cidr_block]
   }
 
   egress {
@@ -171,7 +126,7 @@ resource "aws_instance" "evrim-dev-server" {
   ami                    = "ami-04b70fa74e45c3917"
   instance_type          = "t2.xlarge"
   vpc_security_group_ids = [aws_security_group.evrim-dev-server-private.id]
-  subnet_id              = aws_subnet.private_subnet[0].id
+  subnet_id              = module.vpc.private_subnets[0]
   iam_instance_profile   = aws_iam_instance_profile.ssm_instance_profile.name
 
   tags = {
@@ -201,8 +156,7 @@ resource "aws_lb_target_group" "evrim-dev-server-tg" {
   name     = "evrim-dev-server-tg"
   port     = 8080
   protocol = "TCP"
-  vpc_id   = aws_vpc.evrim-vpc-dev.id
-
+  vpc_id   = module.vpc.vpc_id
   health_check {
     enabled = true
   }
@@ -221,7 +175,7 @@ resource "aws_lb" "evrim-dev-server-lb" {
   name               = "evrim-dev-server-lb"
   internal           = true
   load_balancer_type = "network"
-  subnets            = aws_subnet.private_subnet[*].id
+  subnets            = module.vpc.private_subnets
 
   tags = {
     Name = "Evrim Dev Server LB"
@@ -256,7 +210,7 @@ resource "aws_apigatewayv2_stage" "evrim-dev-api-gw-stage" {
 resource "aws_apigatewayv2_vpc_link" "evrim-dev-api-gw-vpc-link" {
   name               = "evrim-dev-api-gw-vpc-link"
   security_group_ids = [aws_security_group.evrim-dev-server-private.id]
-  subnet_ids         = aws_subnet.private_subnet[*].id
+  subnet_ids         = module.vpc.private_subnets
 }
 
 // Gateway private resource integration

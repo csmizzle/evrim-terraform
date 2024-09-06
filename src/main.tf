@@ -1,0 +1,280 @@
+provider "aws" {
+  region = "us-east-1"
+}
+
+locals {
+  services = {
+    "ec2messages" : {
+      "name" : "com.amazonaws.us-east-1.ec2messages"
+    },
+    "ssm" : {
+      "name" : "com.amazonaws.us-east-1.ssm"
+    },
+    "ssmmessages" : {
+      "name" : "com.amazonaws.us-east-1.ssmmessages"
+    }
+  }
+}
+
+// VPC and Subnets
+resource "aws_vpc" "evrim-vpc-dev" {
+  cidr_block = "10.0.0.0/16"
+  enable_dns_hostnames = true
+  enable_dns_support = true
+  tags = {
+    Name = "Evrim Dev"
+  }
+}
+
+// Configure VPC for SSM
+resource "aws_vpc_endpoint" "ssm_endpoint" {
+  for_each            = local.services
+  vpc_id              = aws_vpc.evrim-vpc-dev.id
+  service_name        = each.value.name
+  vpc_endpoint_type   = "Interface"
+  security_group_ids  = [aws_security_group.ssm_https.id]
+  private_dns_enabled = true
+  ip_address_type     = "ipv4"
+  subnet_ids          = aws_subnet.private_subnet[*].id
+}
+
+
+resource "aws_security_group" "ssm_https" {
+  name        = "allow_ssm"
+  description = "Allow SSM traffic"
+  vpc_id      = aws_vpc.evrim-vpc-dev.id
+  ingress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = [aws_vpc.evrim-vpc-dev.cidr_block]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  tags = {
+    Name = "Private Instance"
+  }
+}
+
+resource "aws_subnet" "public_subnets" {
+  count             = length(var.public_subnet_cidrs)
+  vpc_id            = aws_vpc.evrim-vpc-dev.id
+  cidr_block        = element(var.public_subnet_cidrs, count.index)
+  availability_zone = element(var.azs, count.index)
+
+  tags = {
+    Name = "Public Subnet ${count.index + 1}"
+  }
+}
+
+
+resource "aws_subnet" "private_subnet" {
+  count             = length(var.private_subnet_cidrs)
+  vpc_id            = aws_vpc.evrim-vpc-dev.id
+  cidr_block        = element(var.private_subnet_cidrs, count.index)
+  availability_zone = element(var.azs, count.index)
+
+  tags = {
+    Name = "Private Subnet ${count.index + 1}"
+  }
+}
+
+
+resource "aws_internet_gateway" "gw" {
+  vpc_id = aws_vpc.evrim-vpc-dev.id
+
+  tags = {
+    Name = "Evrim Dev IGW"
+  }
+}
+
+
+resource "aws_route_table" "public_route_table" {
+  vpc_id = aws_vpc.evrim-vpc-dev.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.gw.id
+  }
+
+  tags = {
+    name = "Public Route Table 2"
+  }
+}
+
+
+resource "aws_route_table_association" "public_route_table_association" {
+  count          = length(aws_subnet.public_subnets)
+  subnet_id      = element(aws_subnet.public_subnets[*].id, count.index)
+  route_table_id = aws_route_table.public_route_table.id
+}
+
+
+// configure SSM for the instance
+resource "aws_iam_role" "ssm_role" {
+  name = "ssm_role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Action = "sts:AssumeRole",
+        Effect = "Allow",
+        Principal = {
+          Service = "ec2.amazonaws.com"
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "ssm_role_AmazonSSMManagedInstanceCore" {
+  role       = aws_iam_role.ssm_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+resource "aws_iam_instance_profile" "ssm_instance_profile" {
+  name = "ssm_instance_profile"
+  role = aws_iam_role.ssm_role.name
+}
+
+// the follwing is closely related to this tutorial https://www.youtube.com/watch?v=XhS2JbPg8jA&t=1128s
+// security group
+resource "aws_security_group" "evrim-dev-server-private" {
+  name        = "evrim-dev-server-private"
+  description = "Allow API Access"
+  vpc_id      = aws_vpc.evrim-vpc-dev.id
+
+  ingress {
+    description = "Allow Healthchecks"
+    from_port   = 8080
+    to_port     = 8080
+    protocol    = "tcp"
+    cidr_blocks = [aws_vpc.evrim-vpc-dev.cidr_block]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+// create ec2 instance
+resource "aws_instance" "evrim-dev-server" {
+  ami                    = "ami-04b70fa74e45c3917"
+  instance_type          = "t2.xlarge"
+  vpc_security_group_ids = [aws_security_group.evrim-dev-server-private.id]
+  subnet_id              = aws_subnet.private_subnet[0].id
+  iam_instance_profile   = aws_iam_instance_profile.ssm_instance_profile.name
+
+  tags = {
+    Name = "Private Evrim Dev Server"
+  }
+}
+
+
+resource "aws_ebs_volume" "evrim-dev-volume" {
+  availability_zone = element(var.azs, 0) // Replace count.index with a specific index value
+  size              = 256
+  tags = {
+    Name = "Evrim Dev EBS Volume"
+  }
+}
+
+
+resource "aws_volume_attachment" "evrim-dev-volume-attachment" {
+  device_name = "/dev/sda2"
+  instance_id = aws_instance.evrim-dev-server.id
+  volume_id   = aws_ebs_volume.evrim-dev-volume.id
+}
+
+
+// Create AWS LB target group
+resource "aws_lb_target_group" "evrim-dev-server-tg" {
+  name     = "evrim-dev-server-tg"
+  port     = 8080
+  protocol = "TCP"
+  vpc_id   = aws_vpc.evrim-vpc-dev.id
+
+  health_check {
+    enabled = true
+  }
+}
+
+
+resource "aws_lb_target_group_attachment" "evrim-dev-server-tg-attachment" {
+  target_group_arn = aws_lb_target_group.evrim-dev-server-tg.arn
+  target_id        = aws_instance.evrim-dev-server.id
+  port             = 8080
+}
+
+
+// Prviate ALB
+resource "aws_lb" "evrim-dev-server-lb" {
+  name               = "evrim-dev-server-lb"
+  internal           = true
+  load_balancer_type = "network"
+  subnets            = aws_subnet.private_subnet[*].id
+
+  tags = {
+    Name = "Evrim Dev Server LB"
+  }
+}
+
+// Listener
+resource "aws_lb_listener" "evrim-dev-server-lb-listener" {
+  load_balancer_arn = aws_lb.evrim-dev-server-lb.arn
+  port              = 8080
+  protocol          = "TCP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.evrim-dev-server-tg.arn
+  }
+}
+
+// API Gateway
+resource "aws_apigatewayv2_api" "evrim-dev-api-gw" {
+  name          = "evrim-dev-api-gw"
+  protocol_type = "HTTP"
+}
+
+resource "aws_apigatewayv2_stage" "evrim-dev-api-gw-stage" {
+  api_id      = aws_apigatewayv2_api.evrim-dev-api-gw.id
+  name        = "staging"
+  auto_deploy = true
+}
+
+// Gateway VPC Link
+resource "aws_apigatewayv2_vpc_link" "evrim-dev-api-gw-vpc-link" {
+  name               = "evrim-dev-api-gw-vpc-link"
+  security_group_ids = [aws_security_group.evrim-dev-server-private.id]
+  subnet_ids         = aws_subnet.private_subnet[*].id
+}
+
+// Gateway private resource integration
+resource "aws_apigatewayv2_integration" "evrim-dev-gw-integration" {
+  api_id = aws_apigatewayv2_api.evrim-dev-api-gw.id
+
+  integration_uri    = aws_lb_listener.evrim-dev-server-lb-listener.arn
+  integration_type   = "HTTP_PROXY"
+  integration_method = "ANY"
+  connection_type    = "VPC_LINK"
+  connection_id      = aws_apigatewayv2_vpc_link.evrim-dev-api-gw-vpc-link.id
+}
+
+
+// Gateway proxy route
+resource "aws_apigatewayv2_route" "name" {
+  api_id = aws_apigatewayv2_api.evrim-dev-api-gw.id
+
+  route_key = "ANY /{proxy+}"
+  target    = "integrations/${aws_apigatewayv2_integration.evrim-dev-gw-integration.id}"
+}

@@ -1,0 +1,6 @@
+repos:
+  - repo: https://github.com/AleksaC/terraform-py
+    rev: v1.9.5
+    hooks:
+      - id: tf-fmt
+      - id: tf-validate

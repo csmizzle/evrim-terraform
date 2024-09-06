@@ -19,13 +19,13 @@ locals {
 
 // VPC Module
 module "vpc" {
-  source = "terraform-aws-modules/vpc/aws"
-  name   = "evrim-vpc-dev"
-  azs    = var.azs
-  public_subnets = var.public_subnet_cidrs
+  source          = "terraform-aws-modules/vpc/aws"
+  name            = "evrim-vpc-dev"
+  azs             = var.azs
+  public_subnets  = var.public_subnet_cidrs
   private_subnets = var.private_subnet_cidrs
 
-  enable_nat_gateway = true
+  enable_nat_gateway   = true
   enable_dns_hostnames = true
   enable_dns_support   = true
   tags = {
@@ -88,6 +88,7 @@ resource "aws_iam_role" "ssm_role" {
   })
 }
 
+
 resource "aws_iam_role_policy_attachment" "ssm_role_AmazonSSMManagedInstanceCore" {
   role       = aws_iam_role.ssm_role.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
@@ -121,6 +122,7 @@ resource "aws_security_group" "evrim-dev-server-private" {
   }
 }
 
+
 // create ec2 instance
 resource "aws_instance" "evrim-dev-server" {
   ami                    = "ami-04b70fa74e45c3917"
@@ -150,6 +152,79 @@ resource "aws_volume_attachment" "evrim-dev-volume-attachment" {
   volume_id   = aws_ebs_volume.evrim-dev-volume.id
 }
 
+// ECR
+resource "aws_ecr_repository" "evrim-server" {
+  name                 = "evrim-server"
+  image_tag_mutability = "MUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  tags = {
+    Name = "Evrim Server Repo"
+  }
+}
+
+resource "aws_ecr_repository" "evrim-discord" {
+  name                 = "evrim-discord"
+  image_tag_mutability = "MUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  tags = {
+    Name = "Evrim Discord Repo"
+  }
+}
+
+
+// keep the last 5 images
+resource "aws_ecr_lifecycle_policy" "evrim-server-lifecycle" {
+  repository = aws_ecr_repository.evrim-server.name
+
+  policy = jsonencode({
+    rules = [
+      {
+        rulePriority = 1,
+        description  = "Keep last 5 images",
+        selection = {
+          tagStatus   = "any",
+          countType   = "imageCountMoreThan",
+          countNumber = 5
+        },
+        action = {
+          type = "expire"
+        }
+      }
+    ]
+  })
+
+}
+
+
+resource "aws_ecr_lifecycle_policy" "evrim-discord-lifecycle" {
+  repository = aws_ecr_repository.evrim-discord.name
+
+  policy = jsonencode({
+    rules = [
+      {
+        rulePriority = 1,
+        description  = "Keep last 5 images",
+        selection = {
+          tagStatus   = "any",
+          countType   = "imageCountMoreThan",
+          countNumber = 5
+        },
+        action = {
+          type = "expire"
+        }
+      }
+    ]
+  })
+
+}
 
 // Create AWS LB target group
 resource "aws_lb_target_group" "evrim-dev-server-tg" {
@@ -231,4 +306,14 @@ resource "aws_apigatewayv2_route" "name" {
 
   route_key = "ANY /{proxy+}"
   target    = "integrations/${aws_apigatewayv2_integration.evrim-dev-gw-integration.id}"
+}
+
+
+// outputs for ecr uris
+output "evrim_server_ecr_uri" {
+  value = aws_ecr_repository.evrim-server.repository_url
+}
+
+output "evrim_discord_ecr_uri" {
+  value = aws_ecr_repository.evrim-discord.repository_url
 }

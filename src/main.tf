@@ -267,7 +267,7 @@ resource "aws_apigatewayv2_api" "evrim-dev-api-gw" {
 
 resource "aws_apigatewayv2_stage" "evrim-dev-api-gw-stage" {
   api_id      = aws_apigatewayv2_api.evrim-dev-api-gw.id
-  name        = "staging"
+  name        = "api"
   auto_deploy = true
 }
 

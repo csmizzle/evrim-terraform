@@ -308,6 +308,15 @@ resource "aws_apigatewayv2_route" "name" {
   target    = "integrations/${aws_apigatewayv2_integration.evrim-dev-gw-integration.id}"
 }
 
+// Evrim DEv Bucket for S3
+resource "aws_s3_bucket" "evrim-dev-bucket" {
+  bucket = "evrim-dev-bucket"
+
+  tags = {
+    Name = "Evrim Dev Bucket"
+  }
+}
+
 
 // outputs for ecr uris
 output "evrim_server_ecr_uri" {

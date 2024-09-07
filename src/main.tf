@@ -131,25 +131,14 @@ resource "aws_instance" "evrim-dev-server" {
   subnet_id              = module.vpc.private_subnets[0]
   iam_instance_profile   = aws_iam_instance_profile.ssm_instance_profile.name
 
+  // increase the volume size of root volume
+  root_block_device {
+    volume_size = 256
+  }
+
   tags = {
     Name = "Private Evrim Dev Server"
   }
-}
-
-
-resource "aws_ebs_volume" "evrim-dev-volume" {
-  availability_zone = element(var.azs, 0) // Replace count.index with a specific index value
-  size              = 256
-  tags = {
-    Name = "Evrim Dev EBS Volume"
-  }
-}
-
-
-resource "aws_volume_attachment" "evrim-dev-volume-attachment" {
-  device_name = "/dev/sda2"
-  instance_id = aws_instance.evrim-dev-server.id
-  volume_id   = aws_ebs_volume.evrim-dev-volume.id
 }
 
 // ECR

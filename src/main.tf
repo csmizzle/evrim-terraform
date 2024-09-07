@@ -223,6 +223,7 @@ resource "aws_lb_target_group" "evrim-dev-server-tg" {
   vpc_id   = module.vpc.vpc_id
   health_check {
     enabled = true
+    path    = "/ht/"
   }
 }
 

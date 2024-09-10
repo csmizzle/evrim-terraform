@@ -16,3 +16,11 @@ variable "azs" {
   description = "Availability Zones"
   default     = ["us-east-1a", "us-east-1b", "us-east-1c"]
 }
+
+
+variable "api-gw-domain" {
+  type        = string
+  description = "API Gateway Domain Name"
+  default     = "evrim.ai"
+
+}

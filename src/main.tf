@@ -298,7 +298,7 @@ resource "aws_apigatewayv2_route" "name" {
   target    = "integrations/${aws_apigatewayv2_integration.evrim-dev-gw-integration.id}"
 }
 
-// Evrim DEv Bucket for S3
+// Evrim Dev Bucket for S3
 resource "aws_s3_bucket" "evrim-dev-bucket" {
   bucket = "evrim-dev-bucket"
 
@@ -308,6 +308,72 @@ resource "aws_s3_bucket" "evrim-dev-bucket" {
 }
 
 
+// Route53 for GoDaddy Domain
+resource "aws_route53_zone" "evrim-domain" {
+  name = var.api-gw-domain
+}
+
+
+// AWS ACM Certificate
+resource "aws_acm_certificate" "evrim-api-domain-cert" {
+  domain_name       = var.api-gw-domain
+  validation_method = "DNS"
+
+  tags = {
+    Name = "Evrim API Domain Certificate"
+  }
+}
+
+resource "aws_route53_record" "evrim_api_domain_cert_validation" {
+  for_each = {
+    for dvo in aws_acm_certificate.evrim-api-domain-cert.domain_validation_options : dvo.domain_name => {
+      name   = dvo.resource_record_name
+      type   = dvo.resource_record_type
+      record = dvo.resource_record_value
+    }
+  }
+
+  zone_id = aws_route53_zone.evrim-domain.zone_id
+  name    = each.value.name
+  type    = each.value.type
+  ttl     = 300
+  records = [each.value.record]
+}
+
+
+// API Gateway Custom Domain
+resource "aws_apigatewayv2_domain_name" "evrim-api-domain" {
+  domain_name = var.api-gw-domain
+
+  domain_name_configuration {
+    certificate_arn = aws_acm_certificate.evrim-api-domain-cert.arn
+    endpoint_type   = "REGIONAL"
+    security_policy = "TLS_1_2"
+  }
+}
+
+
+// Map the domain to the API Gateway
+resource "aws_apigatewayv2_api_mapping" "evrim-dev-api-mapping" {
+  api_id      = aws_apigatewayv2_api.evrim-dev-api-gw.id
+  domain_name = aws_apigatewayv2_domain_name.evrim-api-domain.domain_name
+  stage       = aws_apigatewayv2_stage.evrim-dev-api-gw-stage.name
+}
+
+
+// Route53 alias record
+resource "aws_route53_record" "evrim-api-domain-alias" {
+  zone_id = aws_route53_zone.evrim-domain.zone_id
+  name    = aws_apigatewayv2_domain_name.evrim-api-domain.domain_name
+  type    = "A"
+
+  alias {
+    name                   = aws_apigatewayv2_domain_name.evrim-api-domain.domain_name_configuration[0].target_domain_name
+    zone_id                = aws_apigatewayv2_domain_name.evrim-api-domain.domain_name_configuration[0].hosted_zone_id
+    evaluate_target_health = false
+  }
+}
+
 // outputs for ecr uris
 output "evrim_server_ecr_uri" {
   value = aws_ecr_repository.evrim-server.repository_url
@@ -315,4 +381,14 @@ output "evrim_server_ecr_uri" {
 
 output "evrim_discord_ecr_uri" {
   value = aws_ecr_repository.evrim-discord.repository_url
+}
+
+/// output for nameservers
+output "evrim_domain_nameservers" {
+  value = aws_route53_zone.evrim-domain.name_servers
+}
+
+// output for api gateway url
+output "evrim_api_cert_arn" {
+  value = aws_acm_certificate.evrim-api-domain-cert.arn
 }

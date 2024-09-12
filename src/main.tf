@@ -267,7 +267,7 @@ resource "aws_apigatewayv2_api" "evrim-dev-api-gw" {
 
 resource "aws_apigatewayv2_stage" "evrim-dev-api-gw-stage" {
   api_id      = aws_apigatewayv2_api.evrim-dev-api-gw.id
-  name        = "api"
+  name        = "prod"
   auto_deploy = true
 }
 
@@ -310,13 +310,13 @@ resource "aws_s3_bucket" "evrim-dev-bucket" {
 
 // Route53 for GoDaddy Domain
 resource "aws_route53_zone" "evrim-domain" {
-  name = var.api-gw-domain
+  name = var.evrim-domain
 }
 
 
-// AWS ACM Certificate
+// AWS API Domain ACM Certificate
 resource "aws_acm_certificate" "evrim-api-domain-cert" {
-  domain_name       = var.api-gw-domain
+  domain_name       = var.evrim-api-domain
   validation_method = "DNS"
 
   tags = {
@@ -324,7 +324,8 @@ resource "aws_acm_certificate" "evrim-api-domain-cert" {
   }
 }
 
-resource "aws_route53_record" "evrim_api_domain_cert_validation" {
+
+resource "aws_route53_record" "evrim-api-domain-cert-validation" {
   for_each = {
     for dvo in aws_acm_certificate.evrim-api-domain-cert.domain_validation_options : dvo.domain_name => {
       name   = dvo.resource_record_name
@@ -341,9 +342,15 @@ resource "aws_route53_record" "evrim_api_domain_cert_validation" {
 }
 
 
+resource "aws_acm_certificate_validation" "ervim-api-domain-cert-validation" {
+  certificate_arn         = aws_acm_certificate.evrim-api-domain-cert.arn
+  validation_record_fqdns = [for record in aws_route53_record.evrim-api-domain-cert-validation : record.fqdn]
+}
+
+
 // API Gateway Custom Domain
 resource "aws_apigatewayv2_domain_name" "evrim-api-domain" {
-  domain_name = var.api-gw-domain
+  domain_name = var.evrim-api-domain
 
   domain_name_configuration {
     certificate_arn = aws_acm_certificate.evrim-api-domain-cert.arn

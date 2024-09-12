@@ -18,9 +18,14 @@ variable "azs" {
 }
 
 
-variable "api-gw-domain" {
+variable "evrim-domain" {
   type        = string
-  description = "API Gateway Domain Name"
+  description = "Domain Name"
   default     = "evrim.ai"
+}
 
+variable "evrim-api-domain" {
+  type        = string
+  description = "API Domain Name"
+  default     = "api.evrim.ai"
 }

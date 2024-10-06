@@ -168,6 +168,19 @@ resource "aws_ecr_repository" "evrim-discord" {
   }
 }
 
+resource "aws_ecr_repository" "evrim-ui" {
+  name                 = "evrim-ui"
+  image_tag_mutability = "MUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  tags = {
+    Name = "Evrim UI Repo"
+  }
+}
+
 
 // keep the last 5 images
 resource "aws_ecr_lifecycle_policy" "evrim-server-lifecycle" {
@@ -195,6 +208,28 @@ resource "aws_ecr_lifecycle_policy" "evrim-server-lifecycle" {
 
 resource "aws_ecr_lifecycle_policy" "evrim-discord-lifecycle" {
   repository = aws_ecr_repository.evrim-discord.name
+
+  policy = jsonencode({
+    rules = [
+      {
+        rulePriority = 1,
+        description  = "Keep last 5 images",
+        selection = {
+          tagStatus   = "any",
+          countType   = "imageCountMoreThan",
+          countNumber = 5
+        },
+        action = {
+          type = "expire"
+        }
+      }
+    ]
+  })
+
+}
+
+resource "aws_ecr_lifecycle_policy" "evrim-ui-lifecycle" {
+  repository = aws_ecr_repository.evrim-ui.name
 
   policy = jsonencode({
     rules = [

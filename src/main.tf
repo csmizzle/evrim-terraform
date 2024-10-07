@@ -215,6 +215,24 @@ resource "aws_ecr_lifecycle_policy" "evrim-discord-lifecycle" {
 
 }
 
+// Create Evrim UI tagret group
+resource "aws_lb_target_group" "evrim-ui-tg" {
+  name     = "evrim-dev-ui-tg"
+  port     = 3000
+  protocol = "HTTP"
+  vpc_id   = module.vpc.vpc_id
+  health_check {
+    enabled = true
+    path    = "/login/"
+  }
+}
+
+resource "aws_lb_target_group_attachment" "evrim-ui-tg-attachment" {
+  target_group_arn = aws_lb_target_group.evrim-ui-tg.arn
+  target_id        = aws_instance.evrim-dev-server.id
+  port             = 3000
+}
+
 // Create AWS LB target group
 resource "aws_lb_target_group" "evrim-dev-server-tg" {
   name     = "evrim-dev-server-tg"
@@ -259,6 +277,19 @@ resource "aws_lb_listener" "evrim-dev-server-lb-listener" {
   }
 }
 
+// Create Listener for UI
+resource "aws_lb_listener" "evrim-ui-lb-listener" {
+  load_balancer_arn = aws_lb.evrim-dev-server-lb.arn
+  port              = 3000
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.evrim-ui-tg.arn
+  }
+}
+
+
 // API Gateway
 resource "aws_apigatewayv2_api" "evrim-dev-api-gw" {
   name          = "evrim-dev-api-gw"
@@ -290,6 +321,18 @@ resource "aws_apigatewayv2_integration" "evrim-dev-gw-integration" {
 }
 
 
+// UI Gateway private resource integration
+resource "aws_apigatewayv2_integration" "evrim-ui-gw-integration" {
+  api_id = aws_apigatewayv2_api.evrim-dev-api-gw.id
+
+  integration_uri    = aws_lb_listener.evrim-ui-lb-listener.arn
+  integration_type   = "HTTP_PROXY"
+  integration_method = "ANY"
+  connection_type    = "VPC_LINK"
+  connection_id      = aws_apigatewayv2_vpc_link.evrim-dev-api-gw-vpc-link.id
+}
+
+
 // Gateway proxy route
 resource "aws_apigatewayv2_route" "name" {
   api_id = aws_apigatewayv2_api.evrim-dev-api-gw.id
@@ -298,13 +341,12 @@ resource "aws_apigatewayv2_route" "name" {
   target    = "integrations/${aws_apigatewayv2_integration.evrim-dev-gw-integration.id}"
 }
 
-// Evrim Dev Bucket for S3
-resource "aws_s3_bucket" "evrim-dev-bucket" {
-  bucket = "evrim-dev-bucket"
+// UI Gateway proxy route
+resource "aws_apigatewayv2_route" "ui-name" {
+  api_id = aws_apigatewayv2_api.evrim-dev-api-gw.id
 
-  tags = {
-    Name = "Evrim Dev Bucket"
-  }
+  route_key = "ANY /{proxy+}"
+  target    = "integrations/${aws_apigatewayv2_integration.evrim-ui-gw-integration.id}"
 }
 
 
@@ -325,6 +367,17 @@ resource "aws_acm_certificate" "evrim-api-domain-cert" {
 }
 
 
+// AWS UI Domain ACM Certificate
+resource "aws_acm_certificate" "evrim-ui-domain-cert" {
+  domain_name       = var.evrim-ui-domain
+  validation_method = "DNS"
+
+  tags = {
+    Name = "Evrim UI Domain Certificate"
+  }
+}
+
+// Route53 Record for ACM Certificate Validation
 resource "aws_route53_record" "evrim-api-domain-cert-validation" {
   for_each = {
     for dvo in aws_acm_certificate.evrim-api-domain-cert.domain_validation_options : dvo.domain_name => {
@@ -341,10 +394,33 @@ resource "aws_route53_record" "evrim-api-domain-cert-validation" {
   records = [each.value.record]
 }
 
+// Route53 Record for ACM Certificate Validation  for UI
+resource "aws_route53_record" "evrim-ui-domain-cert-validation" {
+  for_each = {
+    for dvo in aws_acm_certificate.evrim-ui-domain-cert.domain_validation_options : dvo.domain_name => {
+      name   = dvo.resource_record_name
+      type   = dvo.resource_record_type
+      record = dvo.resource_record_value
+    }
+  }
 
+  zone_id = aws_route53_zone.evrim-domain.zone_id
+  name    = each.value.name
+  type    = each.value.type
+  ttl     = 300
+  records = [each.value.record]
+}
+
+// wait for the api certificate to be issued
 resource "aws_acm_certificate_validation" "ervim-api-domain-cert-validation" {
   certificate_arn         = aws_acm_certificate.evrim-api-domain-cert.arn
   validation_record_fqdns = [for record in aws_route53_record.evrim-api-domain-cert-validation : record.fqdn]
+}
+
+// wait for the ui certificate to be issued
+resource "aws_acm_certificate_validation" "ervim-ui-domain-cert-validation" {
+  certificate_arn         = aws_acm_certificate.evrim-ui-domain-cert.arn
+  validation_record_fqdns = [for record in aws_route53_record.evrim-ui-domain-cert-validation : record.fqdn]
 }
 
 
@@ -360,10 +436,30 @@ resource "aws_apigatewayv2_domain_name" "evrim-api-domain" {
 }
 
 
+// API Gateway Custom Domain for UI
+resource "aws_apigatewayv2_domain_name" "evrim-ui-domain" {
+  domain_name = var.evrim-ui-domain
+
+  domain_name_configuration {
+    certificate_arn = aws_acm_certificate.evrim-ui-domain-cert.arn
+    endpoint_type   = "REGIONAL"
+    security_policy = "TLS_1_2"
+  }
+}
+
+
 // Map the domain to the API Gateway
 resource "aws_apigatewayv2_api_mapping" "evrim-dev-api-mapping" {
   api_id      = aws_apigatewayv2_api.evrim-dev-api-gw.id
   domain_name = aws_apigatewayv2_domain_name.evrim-api-domain.domain_name
+  stage       = aws_apigatewayv2_stage.evrim-dev-api-gw-stage.name
+}
+
+
+// Map the domain to the UI Gateway
+resource "aws_apigatewayv2_api_mapping" "evrim-ui-api-mapping" {
+  api_id      = aws_apigatewayv2_api.evrim-dev-api-gw.id
+  domain_name = aws_apigatewayv2_domain_name.evrim-ui-domain.domain_name
   stage       = aws_apigatewayv2_stage.evrim-dev-api-gw-stage.name
 }
 
@@ -377,6 +473,19 @@ resource "aws_route53_record" "evrim-api-domain-alias" {
   alias {
     name                   = aws_apigatewayv2_domain_name.evrim-api-domain.domain_name_configuration[0].target_domain_name
     zone_id                = aws_apigatewayv2_domain_name.evrim-api-domain.domain_name_configuration[0].hosted_zone_id
+    evaluate_target_health = false
+  }
+}
+
+// Route53 alias record for UI
+resource "aws_route53_record" "evrim-ui-domain-alias" {
+  zone_id = aws_route53_zone.evrim-domain.zone_id
+  name    = aws_apigatewayv2_domain_name.evrim-ui-domain.domain_name
+  type    = "A"
+
+  alias {
+    name                   = aws_apigatewayv2_domain_name.evrim-ui-domain.domain_name_configuration[0].target_domain_name
+    zone_id                = aws_apigatewayv2_domain_name.evrim-ui-domain.domain_name_configuration[0].hosted_zone_id
     evaluate_target_health = false
   }
 }

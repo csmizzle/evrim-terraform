@@ -29,3 +29,10 @@ variable "evrim-api-domain" {
   description = "API Domain Name"
   default     = "api.evrim.ai"
 }
+
+variable "evrim-ui-domain" {
+  type        = string
+  description = "UI Domain Name"
+  default     = "app.evrim.ai"
+
+}

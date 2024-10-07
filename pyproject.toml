@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "evrim-terraform"
-version = "0.2.2"
+version = "0.2.3"
 description = "Evrim Terraform Code"
 authors = ["csmizzle <chrissmith700@gmail.com>"]
 

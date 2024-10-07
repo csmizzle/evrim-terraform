@@ -122,14 +122,39 @@ resource "aws_security_group" "evrim-dev-server-private" {
   }
 }
 
+// Security group for UI access
+resource "aws_security_group" "evrim-dev-ui-private" {
+  name        = "evrim-dev-ui-private"
+  description = "Allow UI Access"
+  vpc_id      = module.vpc.vpc_id
+
+  ingress {
+    description = "Allow Healthchecks"
+    from_port   = 3000
+    to_port     = 3000
+    protocol    = "tcp"
+    cidr_blocks = [module.vpc.vpc_cidr_block]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
 
 // create ec2 instance
 resource "aws_instance" "evrim-dev-server" {
-  ami                    = "ami-04b70fa74e45c3917"
-  instance_type          = "t2.xlarge"
-  vpc_security_group_ids = [aws_security_group.evrim-dev-server-private.id]
-  subnet_id              = module.vpc.private_subnets[0]
-  iam_instance_profile   = aws_iam_instance_profile.ssm_instance_profile.name
+  ami           = "ami-04b70fa74e45c3917"
+  instance_type = "t2.xlarge"
+  vpc_security_group_ids = [
+    aws_security_group.evrim-dev-server-private.id,
+    aws_security_group.evrim-dev-ui-private.id
+  ]
+  subnet_id            = module.vpc.private_subnets[0]
+  iam_instance_profile = aws_iam_instance_profile.ssm_instance_profile.name
 
   // increase the volume size of root volume
   root_block_device {
@@ -219,11 +244,11 @@ resource "aws_ecr_lifecycle_policy" "evrim-discord-lifecycle" {
 resource "aws_lb_target_group" "evrim-ui-tg" {
   name     = "evrim-dev-ui-tg"
   port     = 3000
-  protocol = "HTTP"
+  protocol = "TCP"
   vpc_id   = module.vpc.vpc_id
   health_check {
     enabled = true
-    path    = "/login/"
+    path    = "/prod/ui/login/"
   }
 }
 
@@ -281,7 +306,7 @@ resource "aws_lb_listener" "evrim-dev-server-lb-listener" {
 resource "aws_lb_listener" "evrim-ui-lb-listener" {
   load_balancer_arn = aws_lb.evrim-dev-server-lb.arn
   port              = 3000
-  protocol          = "HTTP"
+  protocol          = "TCP"
 
   default_action {
     type             = "forward"
@@ -304,9 +329,12 @@ resource "aws_apigatewayv2_stage" "evrim-dev-api-gw-stage" {
 
 // Gateway VPC Link
 resource "aws_apigatewayv2_vpc_link" "evrim-dev-api-gw-vpc-link" {
-  name               = "evrim-dev-api-gw-vpc-link"
-  security_group_ids = [aws_security_group.evrim-dev-server-private.id]
-  subnet_ids         = module.vpc.private_subnets
+  name = "evrim-dev-api-gw-vpc-link"
+  security_group_ids = [
+    aws_security_group.evrim-dev-server-private.id,
+    aws_security_group.evrim-dev-ui-private.id
+  ]
+  subnet_ids = module.vpc.private_subnets
 }
 
 // Gateway private resource integration
@@ -345,7 +373,7 @@ resource "aws_apigatewayv2_route" "name" {
 resource "aws_apigatewayv2_route" "ui-name" {
   api_id = aws_apigatewayv2_api.evrim-dev-api-gw.id
 
-  route_key = "ANY /{proxy+}"
+  route_key = "ANY /prod/ui/{proxy+}"
   target    = "integrations/${aws_apigatewayv2_integration.evrim-ui-gw-integration.id}"
 }
 
